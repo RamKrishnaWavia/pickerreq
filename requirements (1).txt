@@ -1,0 +1,12 @@
+haversine
+streamlit
+pandas
+numpy
+scikit-learn
+folium
+streamlit-folium
+ortools
+geopy
+openpyxl
+shapely
+networkx
