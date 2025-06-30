@@ -5,7 +5,8 @@ from io import BytesIO
 
 # --- Streamlit App Configuration ---
 st.set_page_config(layout="wide")
-st.title("Component-Based Picker Requirement Calculator")
+st.title("Comparative Picker Requirement Calculator")
+st.markdown("Analyze picker needs by including or excluding binning time from the total workload.")
 
 # --- Sidebar for Input Parameters ---
 st.sidebar.header("Input Parameters")
@@ -35,84 +36,79 @@ step = st.sidebar.number_input("Step Size", min_value=1, value=50)
 # 1. Calculate the capacity of one picker for the entire shift in seconds
 shift_duration_sec = shift_duration_min * 60
 
-# 2. Calculate the time required to complete each task for a SINGLE order
-# Milk Task
+# 2. Calculate the base time required for each task component for a SINGLE order
 time_per_milk_item_sec = 3600 / milk_picking_rate_per_hour
-time_for_milk_task_per_order = time_per_milk_item_sec * milk_items_per_order
+time_for_milk_picking_per_order = time_per_milk_item_sec * milk_items_per_order
 
-# Non-Milk Task (including binning)
-# Assumption: The non-milk picker performs the binning task for the order.
 if non_milk_pick_qty > 0:
     time_per_non_milk_item_sec = non_milk_pick_time_sec / non_milk_pick_qty
 else:
     time_per_non_milk_item_sec = 0
-
 time_for_non_milk_picking_per_order = time_per_non_milk_item_sec * non_milk_items_per_order
-time_for_non_milk_task_per_order = time_for_non_milk_picking_per_order + binning_time_per_order_sec
 
-# 3. Generate the data for the table
+# 3. Define the full task time for each scenario
+# Scenario 1 (With Binning): Non-milk picker does the picking and binning.
+non_milk_task_time_with_binning = time_for_non_milk_picking_per_order + binning_time_per_order_sec
+# Scenario 2 (Without Binning): Binning time is ignored.
+non_milk_task_time_without_binning = time_for_non_milk_picking_per_order
+
+# 4. Generate the data for both scenarios
 order_counts = list(range(start_orders, end_orders + 1, step))
-data = []
+data_with_binning = []
+data_without_binning = []
 
 for orders in order_counts:
-    # Calculate total workload in seconds for each task type
-    total_milk_workload_sec = orders * time_for_milk_task_per_order
-    total_non_milk_workload_sec = orders * time_for_non_milk_task_per_order
+    # --- Calculate for "With Binning" Scenario ---
+    total_milk_workload_sec = orders * time_for_milk_picking_per_order
+    total_non_milk_workload_with_binning_sec = orders * non_milk_task_time_with_binning
 
-    # Calculate pickers required for each workload
-    if shift_duration_sec > 0:
-        milk_pickers_required = total_milk_workload_sec / shift_duration_sec
-        non_milk_pickers_required = total_non_milk_workload_sec / shift_duration_sec
-    else:
-        milk_pickers_required = 0
-        non_milk_pickers_required = 0
+    milk_pickers_required = total_milk_workload_sec / shift_duration_sec if shift_duration_sec > 0 else 0
+    non_milk_pickers_with_binning_req = total_non_milk_workload_with_binning_sec / shift_duration_sec if shift_duration_sec > 0 else 0
 
-    # Round up to the nearest whole person for each task
-    milk_pickers_rounded = math.ceil(milk_pickers_required)
-    non_milk_pickers_rounded = math.ceil(non_milk_pickers_required)
-
-    data.append({
+    data_with_binning.append({
         "Orders to Fulfill": orders,
-        "Milk Pickers Required": milk_pickers_rounded,
-        "Non-Milk Pickers Required": non_milk_pickers_rounded,
-        "Total Pickers Required": milk_pickers_rounded + non_milk_pickers_rounded,
-        "Milk Pickers (Exact)": round(milk_pickers_required, 2), # For reference
-        "Non-Milk Pickers (Exact)": round(non_milk_pickers_required, 2) # For reference
+        "Milk Pickers": math.ceil(milk_pickers_required),
+        "Non-Milk Pickers": math.ceil(non_milk_pickers_with_binning_req),
+        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_with_binning_req),
+        "Milk Pickers (Exact)": round(milk_pickers_required, 2),
+        "Non-Milk Pickers (Exact)": round(non_milk_pickers_with_binning_req, 2)
     })
 
-df = pd.DataFrame(data)
-# Reorder columns for clarity
-df = df[[
-    "Orders to Fulfill",
-    "Milk Pickers Required",
-    "Non-Milk Pickers Required",
-    "Total Pickers Required",
-    "Milk Pickers (Exact)",
-    "Non-Milk Pickers (Exact)"
-]]
+    # --- Calculate for "Without Binning" Scenario ---
+    total_non_milk_workload_without_binning_sec = orders * non_milk_task_time_without_binning
+    non_milk_pickers_without_binning_req = total_non_milk_workload_without_binning_sec / shift_duration_sec if shift_duration_sec > 0 else 0
+
+    data_without_binning.append({
+        "Orders to Fulfill": orders,
+        "Milk Pickers": math.ceil(milk_pickers_required),
+        "Non-Milk Pickers": math.ceil(non_milk_pickers_without_binning_req),
+        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_without_binning_req),
+        "Milk Pickers (Exact)": round(milk_pickers_required, 2),
+        "Non-Milk Pickers (Exact)": round(non_milk_pickers_without_binning_req, 2)
+    })
+
+
+# --- Create DataFrames and Reorder Columns ---
+def create_and_format_df(data):
+    df = pd.DataFrame(data)
+    return df[[
+        "Orders to Fulfill", "Milk Pickers", "Non-Milk Pickers", "Total Pickers",
+        "Milk Pickers (Exact)", "Non-Milk Pickers (Exact)"
+    ]]
+
+df_with_binning = create_and_format_df(data_with_binning)
+df_without_binning = create_and_format_df(data_without_binning)
+
 
 # --- Display Results ---
 
 st.subheader("Calculation Summary for a Single Order")
-st.info("This shows the time breakdown to process one order. The binning time is allocated to the Non-Milk Picker's workload.", icon="ℹ️")
+col1, col2, col3 = st.columns(3)
+col1.metric("Milk Picking Time", f"{round(time_for_milk_picking_per_order)} seconds")
+col2.metric("Non-Milk Picking Time", f"{round(time_for_non_milk_picking_per_order)} seconds")
+col3.metric("Binning Time", f"{round(binning_time_per_order_sec)} seconds")
+st.info("In the 'With Binning' scenario, the Binning Time is added to the Non-Milk Picker's workload.", icon="ℹ️")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.metric(
-        "Milk Task Time per Order",
-        f"{round(time_for_milk_task_per_order)} seconds",
-        help=f"Based on picking {milk_items_per_order} milk item(s)."
-    )
-with col2:
-    st.metric(
-        "Non-Milk Task Time per Order",
-        f"{round(time_for_non_milk_task_per_order)} seconds",
-        help=f"Includes {round(time_for_non_milk_picking_per_order)}s for picking {non_milk_items_per_order} item(s) + {binning_time_per_order_sec}s for binning."
-    )
-
-
-st.subheader("Picker Requirement Headcount")
-st.dataframe(df, use_container_width=True)
 
 # --- Excel Export Functionality ---
 @st.cache_data
@@ -127,10 +123,28 @@ def convert_df_to_excel(df_to_convert):
             worksheet.set_column(idx, idx, max_len)
     return output.getvalue()
 
-excel_data = convert_df_to_excel(df)
-st.download_button(
-    label="📥 Download as Excel",
-    data=excel_data,
-    file_name="picker_requirement_by_task.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+
+# --- Tabs for Displaying DataFrames ---
+tab1, tab2 = st.tabs(["With Binning Time", "Without Binning Time"])
+
+with tab1:
+    st.subheader("Scenario 1: Full Process (Picking + Binning)")
+    st.dataframe(df_with_binning, use_container_width=True)
+    excel_data_with_binning = convert_df_to_excel(df_with_binning)
+    st.download_button(
+        label="📥 Download 'With Binning' as Excel",
+        data=excel_data_with_binning,
+        file_name="picker_req_with_binning.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+with tab2:
+    st.subheader("Scenario 2: Picking Only (No Binning Time)")
+    st.dataframe(df_without_binning, use_container_width=True)
+    excel_data_without_binning = convert_df_to_excel(df_without_binning)
+    st.download_button(
+        label="📥 Download 'Without Binning' as Excel",
+        data=excel_data_without_binning,
+        file_name="picker_req_without_binning.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
