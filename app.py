@@ -5,109 +5,95 @@ from io import BytesIO
 
 # --- Streamlit App Configuration ---
 st.set_page_config(layout="wide")
-st.title("Comparative Picker Requirement Calculator")
-st.markdown("Analyze picker needs by including or excluding binning time from the total workload.")
+st.title("Picker Requirement Calculator (Contribution-Based Model)")
 
 # --- Sidebar for Input Parameters ---
 st.sidebar.header("Input Parameters")
 
-# Section for Order Composition
-st.sidebar.subheader("Order Composition")
-milk_items_per_order = st.sidebar.number_input("Milk Items per Order", min_value=1, value=1)
-non_milk_items_per_order = st.sidebar.number_input("Non-Milk Items per Order", min_value=0, value=2)
+# Section for Volume & Contribution
+st.sidebar.subheader("Volume & Contribution")
+start_orders = st.sidebar.number_input("Start Order Count", min_value=100, value=1000, step=100)
+end_orders = st.sidebar.number_input("End Order Count", min_value=start_orders, value=3000, step=100)
+step = st.sidebar.number_input("Step Size", min_value=50, value=100)
+abq = st.sidebar.number_input("Average Basket Quantity (ABQ)", min_value=1.0, value=3.0, step=0.1)
+milk_contribution_percent = st.sidebar.slider("Milk Contribution (%)", 0, 100, 70)
+non_milk_contribution_percent = 100 - milk_contribution_percent
+st.sidebar.metric("Non-Milk Contribution", f"{non_milk_contribution_percent}%")
 
-# Section for Task Timings
-st.sidebar.subheader("Task Timings & Rates")
-milk_picking_rate_per_hour = st.sidebar.number_input("Milk Picking Rate (Qty/Hour/Picker)", min_value=1, value=1800)
-non_milk_pick_time_sec = st.sidebar.number_input("Non-Milk Picking Time (seconds)", min_value=1, value=60, help="Time taken to pick a certain quantity of non-milk items.")
-non_milk_pick_qty = st.sidebar.number_input("Quantity for Non-Milk Picking Time", min_value=1, value=3, help="Number of non-milk items picked in the time above.")
+
+# Section for Task Rates & Timings
+st.sidebar.subheader("Picker Rates & Task Timings")
+milk_picking_rate_per_hour = st.sidebar.number_input("Milk Picking Rate (Qty/Hour/Picker)", min_value=1, value=3600)
+non_milk_picking_rate_per_hour = st.sidebar.number_input("Non-Milk Picking Rate (Qty/Hour/Picker)", min_value=1, value=180)
 binning_time_per_order_sec = st.sidebar.number_input("Binning Time per Order (seconds)", min_value=0, value=20)
 
-# Section for Shift and Order Volume
-st.sidebar.subheader("Shift & Order Volume")
-shift_duration_min = st.sidebar.number_input("Shift Duration (minutes)", min_value=30, value=120)
-start_orders = st.sidebar.number_input("Start Order Count", min_value=1, value=100, step=50)
-end_orders = st.sidebar.number_input("End Order Count", min_value=start_orders, value=2000, step=50)
-step = st.sidebar.number_input("Step Size", min_value=1, value=50)
+# Section for Shift Details
+st.sidebar.subheader("Shift Details")
+shift_duration_min = st.sidebar.number_input("Shift Duration (minutes)", min_value=30, value=180)
 
 
 # --- Calculations ---
 
-# 1. Calculate the capacity of one picker for the entire shift in seconds
+# 1. Calculate base times and capacities
 shift_duration_sec = shift_duration_min * 60
+time_per_milk_unit_sec = 3600 / milk_picking_rate_per_hour
+time_per_non_milk_unit_sec = 3600 / non_milk_picking_rate_per_hour
 
-# 2. Calculate the base time required for each task component for a SINGLE order
-time_per_milk_item_sec = 3600 / milk_picking_rate_per_hour
-time_for_milk_picking_per_order = time_per_milk_item_sec * milk_items_per_order
-
-if non_milk_pick_qty > 0:
-    time_per_non_milk_item_sec = non_milk_pick_time_sec / non_milk_pick_qty
-else:
-    time_per_non_milk_item_sec = 0
-time_for_non_milk_picking_per_order = time_per_non_milk_item_sec * non_milk_items_per_order
-
-# 3. Define the full task time for each scenario
-# Scenario 1 (With Binning): Non-milk picker does the picking and binning.
-non_milk_task_time_with_binning = time_for_non_milk_picking_per_order + binning_time_per_order_sec
-# Scenario 2 (Without Binning): Binning time is ignored.
-non_milk_task_time_without_binning = time_for_non_milk_picking_per_order
-
-# 4. Generate the data for both scenarios
+# 2. Generate data for the tables
 order_counts = list(range(start_orders, end_orders + 1, step))
 data_with_binning = []
 data_without_binning = []
 
 for orders in order_counts:
-    # --- Calculate for "With Binning" Scenario ---
-    total_milk_workload_sec = orders * time_for_milk_picking_per_order
-    total_non_milk_workload_with_binning_sec = orders * non_milk_task_time_with_binning
+    # Calculate total units based on contribution
+    total_units = orders * abq
+    total_milk_units = total_units * (milk_contribution_percent / 100)
+    total_non_milk_units = total_units * (non_milk_contribution_percent / 100)
 
+    # Calculate total workload in seconds for each task
+    total_milk_workload_sec = total_milk_units * time_per_milk_unit_sec
+    total_non_milk_picking_workload_sec = total_non_milk_units * time_per_non_milk_unit_sec
+    total_binning_workload_sec = orders * binning_time_per_order_sec
+
+    # Calculate required pickers for each workload
     milk_pickers_required = total_milk_workload_sec / shift_duration_sec if shift_duration_sec > 0 else 0
-    non_milk_pickers_with_binning_req = total_non_milk_workload_with_binning_sec / shift_duration_sec if shift_duration_sec > 0 else 0
+
+    # Scenario 1: With Binning
+    total_non_milk_and_binning_workload_sec = total_non_milk_picking_workload_sec + total_binning_workload_sec
+    non_milk_pickers_with_binning_req = total_non_milk_and_binning_workload_sec / shift_duration_sec if shift_duration_sec > 0 else 0
 
     data_with_binning.append({
-        "Orders to Fulfill": orders,
+        "Orders": orders,
+        "Total Units": math.ceil(total_units),
         "Milk Pickers": math.ceil(milk_pickers_required),
-        "Non-Milk Pickers": math.ceil(non_milk_pickers_with_binning_req),
-        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_with_binning_req),
-        "Milk Pickers (Exact)": round(milk_pickers_required, 2),
-        "Non-Milk Pickers (Exact)": round(non_milk_pickers_with_binning_req, 2)
+        "Non-Milk Pickers (+Binning)": math.ceil(non_milk_pickers_with_binning_req),
+        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_with_binning_req)
     })
 
-    # --- Calculate for "Without Binning" Scenario ---
-    total_non_milk_workload_without_binning_sec = orders * non_milk_task_time_without_binning
-    non_milk_pickers_without_binning_req = total_non_milk_workload_without_binning_sec / shift_duration_sec if shift_duration_sec > 0 else 0
+    # Scenario 2: Without Binning
+    non_milk_pickers_without_binning_req = total_non_milk_picking_workload_sec / shift_duration_sec if shift_duration_sec > 0 else 0
 
     data_without_binning.append({
-        "Orders to Fulfill": orders,
+        "Orders": orders,
+        "Total Units": math.ceil(total_units),
         "Milk Pickers": math.ceil(milk_pickers_required),
-        "Non-Milk Pickers": math.ceil(non_milk_pickers_without_binning_req),
-        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_without_binning_req),
-        "Milk Pickers (Exact)": round(milk_pickers_required, 2),
-        "Non-Milk Pickers (Exact)": round(non_milk_pickers_without_binning_req, 2)
+        "Non-Milk Pickers (Picking Only)": math.ceil(non_milk_pickers_without_binning_req),
+        "Total Pickers": math.ceil(milk_pickers_required) + math.ceil(non_milk_pickers_without_binning_req)
     })
 
-
-# --- Create DataFrames and Reorder Columns ---
-def create_and_format_df(data):
-    df = pd.DataFrame(data)
-    return df[[
-        "Orders to Fulfill", "Milk Pickers", "Non-Milk Pickers", "Total Pickers",
-        "Milk Pickers (Exact)", "Non-Milk Pickers (Exact)"
-    ]]
-
-df_with_binning = create_and_format_df(data_with_binning)
-df_without_binning = create_and_format_df(data_without_binning)
+# --- Create DataFrames ---
+df_with_binning = pd.DataFrame(data_with_binning)
+df_without_binning = pd.DataFrame(data_without_binning)
 
 
 # --- Display Results ---
 
-st.subheader("Calculation Summary for a Single Order")
+st.subheader("Calculated Task Times per Unit")
 col1, col2, col3 = st.columns(3)
-col1.metric("Milk Picking Time", f"{round(time_for_milk_picking_per_order)} seconds")
-col2.metric("Non-Milk Picking Time", f"{round(time_for_non_milk_picking_per_order)} seconds")
-col3.metric("Binning Time", f"{round(binning_time_per_order_sec)} seconds")
-st.info("In the 'With Binning' scenario, the Binning Time is added to the Non-Milk Picker's workload.", icon="ℹ️")
+col1.metric("Time per Milk Unit", f"{time_per_milk_unit_sec:.1f} seconds")
+col2.metric("Time per Non-Milk Unit", f"{time_per_non_milk_unit_sec:.1f} seconds")
+col3.metric("Time per Binning Task", f"{binning_time_per_order_sec:.1f} seconds")
+st.info("The binning workload is assigned to the Non-Milk picker team in the 'With Binning' scenario.", icon="ℹ️")
 
 
 # --- Excel Export Functionality ---
